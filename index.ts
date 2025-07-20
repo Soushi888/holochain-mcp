@@ -14,6 +14,9 @@ import {
   Console,
   Schema,
   Order,
+  Runtime,
+  Scope,
+  Exit,
 } from "effect";
 import { z } from "zod";
 import {
@@ -22,6 +25,8 @@ import {
   HttpClientResponse,
 } from "@effect/platform";
 import { NodeHttpClient } from "@effect/platform-node";
+import puppeteer from "puppeteer";
+import Fuse from "fuse.js";
 
 // ==== Schemas ====
 const SearchResultSchema = Schema.Struct({
@@ -55,12 +60,18 @@ const ConceptInputSchema = Schema.Struct({
   concept: Schema.String,
 });
 
+const HdkFunctionSchema = Schema.Struct({
+  name: Schema.String,
+  url: Schema.String,
+});
+
 type SearchResult = Schema.Schema.Type<typeof SearchResultSchema>;
 type DocumentationResult = Schema.Schema.Type<typeof DocumentationResultSchema>;
 type SearchInput = Schema.Schema.Type<typeof SearchInputSchema>;
 type FetchInput = Schema.Schema.Type<typeof FetchInputSchema>;
 type FunctionInput = Schema.Schema.Type<typeof FunctionInputSchema>;
 type ConceptInput = Schema.Schema.Type<typeof ConceptInputSchema>;
+type HdkFunction = Schema.Schema.Type<typeof HdkFunctionSchema>;
 
 // ==== Error Types ====
 class FetchError extends Schema.TaggedError<FetchError>()("FetchError", {
@@ -109,14 +120,52 @@ interface HttpService {
 
 const HttpServiceTag = Context.GenericTag<HttpService>("HttpService");
 
-const HttpServiceLive = Layer.effect(
+const HttpServiceLive = Layer.scoped(
   HttpServiceTag,
   Effect.gen(function* () {
     const config = yield* HolochainConfigService;
     const httpClient = yield* HttpClient.HttpClient;
 
-    const fetchPage = (url: string): Effect.Effect<string, FetchError> =>
-      pipe(
+    const browser = yield* Effect.acquireRelease(
+      Effect.tryPromise({
+        try: () => puppeteer.launch({ headless: true }),
+        catch: (e) =>
+          new FetchError({ message: `Puppeteer launch failed: ${e}` }),
+      }),
+      (browser) => Effect.promise(() => browser.close())
+    );
+
+    const fetchPage = (url: string): Effect.Effect<string, FetchError> => {
+      if (url.includes("developer.holochain.org")) {
+        return Effect.tryPromise({
+          try: async () => {
+            const page = await browser.newPage();
+            try {
+              await page.goto(url, {
+                waitUntil: "networkidle2",
+                timeout: config.timeout,
+              });
+              return await page.content();
+            } finally {
+              await page.close();
+            }
+          },
+          catch: (error) =>
+            new FetchError({
+              message: `Puppeteer fetch failed for ${url}: ${error}`,
+            }),
+        }).pipe(
+          Effect.timeout(config.timeout + 2000),
+          Effect.mapError(
+            () =>
+              new FetchError({
+                message: `Timeout fetching with puppeteer: ${url}`,
+              })
+          )
+        );
+      }
+
+      return pipe(
         HttpClientRequest.get(url).pipe(
           HttpClientRequest.setHeaders({
             "User-Agent": config.userAgent,
@@ -132,6 +181,7 @@ const HttpServiceLive = Layer.effect(
           () => new FetchError({ message: `Timeout fetching: ${url}` })
         )
       );
+    };
 
     return { fetchPage };
   })
@@ -148,6 +198,10 @@ interface DocumentationParser {
     html: string,
     url: string
   ) => Effect.Effect<DocumentationResult, ParseError>;
+  readonly parseHdkIndex: (
+    html: string,
+    baseUrl: string
+  ) => Effect.Effect<HdkFunction[], ParseError>;
 }
 
 const DocumentationParserTag = Context.GenericTag<DocumentationParser>(
@@ -220,12 +274,24 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
           Match.value,
           Match.when(
             (url) => url.includes("developer.holochain.org"),
-            () => ({
-              title: $("h1").first().text() || $("title").text(),
-              content:
-                $("main").text() || $(".content").text() || $("article").text(),
-              source: "developer.holochain.org",
-            })
+            () => {
+              // Simplified content extraction
+              const content =
+                $(".main-area").text().trim() ||
+                $("body")
+                  .text()
+                  .trim()
+                  .split("Get Started")[0]
+                  ?.split("Developers")[0]
+                  ?.trim() ||
+                "Error: Could not extract main content.";
+
+              return {
+                title: $("h1").first().text() || $("title").text(),
+                content,
+                source: "developer.holochain.org",
+              };
+            }
           ),
           Match.when(
             (url) => url.includes("docs.rs"),
@@ -256,6 +322,46 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
         new ParseError({
           message: `Failed to parse documentation page: ${error}`,
         }),
+    }),
+  parseHdkIndex: (
+    html: string,
+    baseUrl: string
+  ): Effect.Effect<HdkFunction[], ParseError> =>
+    Effect.try({
+      try: () => {
+        const $ = cheerio.load(html);
+        const functions: HdkFunction[] = [];
+
+        // Look for all function links, including those in modules
+        $("a[href*='fn.']").each((_, el) => {
+          const href = $(el).attr("href");
+          const text = $(el).text().trim();
+
+          if (href && text) {
+            // Extract function name from either the text or the href
+            let functionName = text;
+
+            // If the text looks like a module path (e.g., "crate::entry::create_entry"),
+            // extract just the function name
+            if (functionName.includes("::")) {
+              functionName = functionName.split("::").pop() || functionName;
+            }
+
+            functions.push({
+              name: functionName,
+              url: `${baseUrl}/${href}`, // href already contains the full path like "entry/fn.create_entry.html"
+            });
+          }
+        });
+
+        console.log(
+          `Found ${functions.length} HDK functions:`,
+          functions.map((f) => f.name)
+        );
+        return functions;
+      },
+      catch: (error) =>
+        new ParseError({ message: `Failed to parse HDK index: ${error}` }),
     }),
 });
 
@@ -437,45 +543,45 @@ const HolochainDocServiceLive = Layer.effect(
       DocumentationResult,
       FetchError | ParseError | NotFoundError
     > => {
-      const commonFunctions = [
-        "create_entry",
-        "get",
-        "update_entry",
-        "delete_entry",
-        "create_link",
-        "get_links",
-        "delete_link",
-        "agent_info",
-        "dna_info",
-        "zome_info",
-        "call",
-        "call_remote",
-        "emit_signal",
-        "create_cap_grant",
-        "create_cap_claim",
-        "hash",
-        "verify_signature",
-        "sign",
-      ];
+      // Build the HDK function cache on-demand for each request
+      const hdkIndexUrl = `${config.baseUrls.hdk}/index.html`;
 
       return pipe(
-        commonFunctions,
-        Array.findFirst(
-          (fn) =>
-            fn.toLowerCase().includes(functionName.toLowerCase()) ||
-            functionName.toLowerCase().includes(fn.toLowerCase())
+        httpService.fetchPage(hdkIndexUrl),
+        Effect.flatMap((html) =>
+          parser.parseHdkIndex(html, config.baseUrls.hdk)
         ),
-        Option.match({
-          onNone: () =>
-            Effect.fail(
-              new NotFoundError({
-                message: `HDK function not found: ${functionName}`,
-              })
-            ),
-          onSome: (matchedFunction) => {
-            const url = `${config.baseUrls.hdk}/fn.${matchedFunction}.html`;
-            return fetchDocumentationPage(url);
-          },
+        Effect.flatMap((hdkFunctionsCache) => {
+          const fuse = new Fuse(hdkFunctionsCache, {
+            keys: ["name"],
+            includeScore: true,
+            threshold: 0.4,
+          });
+
+          const searchResults = fuse.search(functionName);
+
+          return pipe(
+            Option.fromNullable(searchResults[0]),
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new NotFoundError({
+                    message: `HDK function not found: ${functionName}`,
+                  })
+                ),
+              onSome: (result) => {
+                return fetchDocumentationPage(result.item.url);
+              },
+            })
+          );
+        }),
+        Effect.catchAll((error) => {
+          console.error("Failed to lookup HDK function:", error);
+          return Effect.fail(
+            new NotFoundError({
+              message: `Failed to lookup HDK function: ${functionName}`,
+            })
+          );
         })
       );
     };
@@ -544,6 +650,10 @@ const MainLive = HolochainDocServiceLive.pipe(
   Layer.provide(HolochainConfigLive)
 );
 
+let runPromise: <E, A>(
+  effect: Effect.Effect<A, E, HolochainDocService>
+) => Promise<A>;
+
 // Helper function to safely decode input
 const safeDecodeInput =
   <A, I>(schema: Schema.Schema<A, I>) =>
@@ -593,9 +703,8 @@ server.registerTool(
       return { results: allResults, query };
     });
 
-    const result = await Effect.runPromise(
+    const result = await runPromise(
       searchProgram.pipe(
-        Effect.provide(MainLive),
         Effect.catchAll((error) => {
           const errorMessage =
             typeof error === "object" && error !== null
@@ -625,7 +734,10 @@ server.registerTool(
     }
 
     const resultText = result.results
-      .map((r) => `**${r.title}** (${r.source})\n${r.url}\n${r.snippet}\n`)
+      .map(
+        (r: SearchResult) =>
+          `**${r.title}** (${r.source})\n${r.url}\n${r.snippet}\n`
+      )
       .join("\n---\n\n");
 
     return {
@@ -660,9 +772,8 @@ server.registerTool(
       return doc;
     });
 
-    const result = await Effect.runPromise(
+    const result = await runPromise(
       fetchProgram.pipe(
-        Effect.provide(MainLive),
         Effect.catchAll((error) =>
           Effect.succeed({
             error:
@@ -719,9 +830,8 @@ server.registerTool(
       return doc;
     });
 
-    const result = await Effect.runPromise(
+    const result = await runPromise(
       functionProgram.pipe(
-        Effect.provide(MainLive),
         Effect.catchAll((error) =>
           Effect.succeed({
             error:
@@ -777,9 +887,8 @@ server.registerTool(
       return doc;
     });
 
-    const result = await Effect.runPromise(
+    const result = await runPromise(
       conceptProgram.pipe(
-        Effect.provide(MainLive),
         Effect.catchAll((error) =>
           Effect.succeed({
             error:
@@ -853,6 +962,12 @@ server.registerTool(
 
 // Start the server
 async function main() {
+  const scope = await Effect.runPromise(Scope.make());
+  const runtime = await Effect.runPromise(
+    Layer.toRuntime(MainLive).pipe(Effect.provideService(Scope.Scope, scope))
+  );
+  runPromise = Runtime.runPromise(runtime);
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Holochain MCP Server running on stdio");

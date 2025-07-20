@@ -21,6 +21,8 @@
     "@modelcontextprotocol/sdk": "latest",
     "cheerio": "^1.0.0-rc.12",
     "effect": "latest",
+    "fuse.js": "^7.1.0",
+    "puppeteer": "^24.14.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
