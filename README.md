@@ -52,8 +52,8 @@ List available HDK modules and their main functions.
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/holochain-mcp-server
-cd holochain-mcp-server
+git clone https://github.com/soushi888/holochain-mcp
+cd holochain-mcp
 ```
 
 2. Install dependencies:
@@ -77,7 +77,7 @@ Add the following to your Claude Desktop configuration file (`~/claude_desktop_c
   "mcpServers": {
     "holochain-docs": {
       "command": "node",
-      "args": ["/absolute/path/to/holochain-mcp-server/build/index.js"]
+      "args": ["/absolute/path/to/holochain-mcp/build/index.js"]
     }
   }
 }
@@ -88,7 +88,7 @@ Add the following to your Claude Desktop configuration file (`~/claude_desktop_c
 ```bash
 claude mcp add-json holochain-docs '{
   "command": "node",
-  "args": ["/absolute/path/to/holochain-mcp-server/build/index.js"],
+  "args": ["/absolute/path/to/holochain-mcp/build/index.js"],
   "env": {}
 }' -s user
 ```
@@ -147,7 +147,9 @@ The server is built using:
 - **@effect/platform**: Effect's platform abstractions for HTTP and other system operations
 - **@modelcontextprotocol/sdk**: Official MCP TypeScript SDK
 - **cheerio**: Server-side jQuery for parsing HTML content
+- **puppeteer**: Browser automation for dynamic content fetching
 - **Effect Schema**: Schema validation and parsing for tool inputs
+- **fuse.js**: Fuzzy search functionality
 
 ### Effect TS Benefits
 
@@ -158,20 +160,19 @@ This implementation showcases Effect TS features:
 - **Functional composition**: Clean, composable code using Effect's pipe and combinators
 - **Resource management**: Automatic cleanup and resource management
 
-The `HolochainDocumentationService` class handles:
+### Dual Fetching Strategy
+
+The server uses two different approaches for fetching documentation:
+- **Puppeteer**: Used for developer.holochain.org to handle dynamic content and JavaScript-rendered pages
+- **Standard HTTP**: Used for docs.rs (HDK/HDI) static Rust documentation
+
+The `HolochainDocumentationService` handles:
 - Searching developer documentation by scraping common pages
 - Searching Rust documentation (HDK/HDI) by checking module pages
 - Fetching and parsing complete documentation pages
 - Mapping function names and concepts to their documentation URLs
 
-All operations are wrapped in Effect programs with proper error handling and resource management. Server-side jQuery for parsing HTML content
-- **zod**: Schema validation for tool inputs
-
-The `HolochainDocumentationService` class handles:
-- Searching developer documentation by scraping common pages
-- Searching Rust documentation (HDK/HDI) by checking module pages
-- Fetching and parsing complete documentation pages
-- Mapping function names and concepts to their documentation URLs
+All operations are wrapped in Effect programs with proper error handling and resource management.
 
 ## Contributing
 
@@ -195,4 +196,4 @@ MIT License - see LICENSE file for details.
 
 - [Holochain Forum](https://forum.holochain.org/)
 - [Holochain Discord](https://discord.gg/k55hHbRNVa)
-- [Issues](https://github.com/yourusername/holochain-mcp-server/issues)
+- [Issues](https://github.com/soushi888/holochain-mcp/issues)

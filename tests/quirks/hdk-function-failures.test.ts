@@ -141,9 +141,9 @@ describe("HDK Function Lookup Failures (Real-World Issues)", () => {
           expect(func, `Function ${funcName} should be available`).toBeDefined()
           
           if (func) {
-            // Verify the URL follows the correct pattern
-            expect(func.url).not.toMatch(/\/fn\.[^/]+\.html$/) // Not the wrong pattern
-            expect(func.url).toMatch(/\/[^/]+\/fn\.[^/]+\.html$/) // Should have module path
+            // Verify the URL follows the correct pattern with module path
+            expect(func.url).not.toMatch(/\/hdk\/fn\.[^/]+\.html$/) // Should not be directly under /hdk/
+            expect(func.url).toMatch(/\/[^/]+\/fn\.[^/]+\.html$/) // Should have module path like entry/fn.create_entry.html
           }
         })
       }))

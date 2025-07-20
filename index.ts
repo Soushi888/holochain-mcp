@@ -148,24 +148,54 @@ const HttpServiceLive = Layer.scoped(
     );
 
     const fetchPage = (url: string): Effect.Effect<string, FetchError> => {
-      // Check cache first
+      // Check cache first - but validate cached content quality
       const cached = pageCache.get(url);
       if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        console.error(`Cache hit for ${url}`);
-        return Effect.succeed(cached.content);
+        // Validate cached content is still good quality
+        const isGoodCache =
+          cached.content.trim().length > 100 &&
+          !cached.content.includes("404") &&
+          !cached.content.includes("Not Found") &&
+          !cached.content.includes("Error");
+
+        if (isGoodCache) {
+          console.error(`Cache hit for ${url}`);
+          return Effect.succeed(cached.content);
+        } else {
+          // Remove bad cached content and refetch
+          pageCache.delete(url);
+          console.error(`Removing bad cached content for ${url}`);
+        }
       }
 
       const fetchAndCache = (content: string) => {
-        pageCache.set(url, { content, timestamp: Date.now() });
-        // Clean old cache entries
-        if (pageCache.size > 100) {
-          const cutoff = Date.now() - CACHE_TTL;
-          for (const [key, value] of pageCache.entries()) {
-            if (value.timestamp < cutoff) {
-              pageCache.delete(key);
+        // Only cache if content is meaningful (not empty and has substantial content)
+        const shouldCache =
+          content.trim().length > 100 &&
+          !content.includes("404") &&
+          !content.includes("Not Found") &&
+          !content.includes("Error");
+
+        if (shouldCache) {
+          pageCache.set(url, { content, timestamp: Date.now() });
+
+          // Clean old cache entries
+          if (pageCache.size > 100) {
+            const cutoff = Date.now() - CACHE_TTL;
+            for (const [key, value] of pageCache.entries()) {
+              if (value.timestamp < cutoff) {
+                pageCache.delete(key);
+              }
             }
           }
+        } else {
+          // Remove any existing bad cache entry for this URL
+          pageCache.delete(url);
+          console.error(
+            `Not caching low-quality content for ${url}: ${content.length} chars`
+          );
         }
+
         return content;
       };
 
@@ -282,7 +312,7 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
         const start = Math.max(0, index - 100);
         const end = Math.min(bodyText.length, index + 200);
         let snippet = bodyText.substring(start, end).trim();
-        
+
         // Clean up snippet - remove common HTML metadata patterns
         snippet = snippet
           .replace(/Circle with shading containing.*?statistic/gi, "")
@@ -290,16 +320,46 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
           .replace(/Edge_Logo_\d+x\d+/gi, "")
           .replace(/\s+/g, " ")
           .trim();
-        
+
         // If snippet is too short or contains metadata, try extracting from main content areas
         if (snippet.length < 50 || snippet.includes("Circle with shading")) {
-          const mainContent = $(".main-area, article, .content").text().trim();
-          if (mainContent) {
-            const mainIndex = mainContent.toLowerCase().indexOf(firstTerm);
-            if (mainIndex >= 0) {
-              const mainStart = Math.max(0, mainIndex - 100);
-              const mainEnd = Math.min(mainContent.length, mainIndex + 200);
-              snippet = mainContent.substring(mainStart, mainEnd).trim();
+          const mainContentSelectors = [
+            ".main-area",
+            "article",
+            ".content",
+            ".main-content",
+            "main",
+            "[role='main']",
+            "div[class*='content']",
+            "div[class*='main']",
+            "body > div",
+          ];
+
+          for (const selector of mainContentSelectors) {
+            const mainContent = $(selector).text().trim();
+            if (mainContent && mainContent.length > snippet.length) {
+              const mainIndex = mainContent.toLowerCase().indexOf(firstTerm);
+              if (mainIndex >= 0) {
+                const mainStart = Math.max(0, mainIndex - 100);
+                const mainEnd = Math.min(mainContent.length, mainIndex + 200);
+                const candidateSnippet = mainContent
+                  .substring(mainStart, mainEnd)
+                  .trim();
+
+                // Clean up candidate snippet
+                const cleanSnippet = candidateSnippet
+                  .replace(/Circle with shading containing.*?statistic/gi, "")
+                  .replace(/YouTube play video icon.*?logo/gi, "")
+                  .replace(/Edge_Logo_\d+x\d+/gi, "")
+                  .replace(/Navigation|Menu|Header|Footer/gi, "")
+                  .replace(/\s+/g, " ")
+                  .trim();
+
+                if (cleanSnippet.length > snippet.length) {
+                  snippet = cleanSnippet;
+                  break;
+                }
+              }
             }
           }
         }
@@ -339,7 +399,7 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
               let content = "";
               let title = "";
 
-              // Try multiple selectors for content (prioritize .main-area)
+              // Try multiple selectors for content with comprehensive fallbacks
               const contentSelectors = [
                 ".main-area",
                 "article",
@@ -347,18 +407,54 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
                 ".main-content",
                 "main",
                 "[role='main']",
+                ".container .content",
+                ".page-content",
+                ".documentation",
+                ".docs-content",
+                // More generic selectors as fallbacks
+                "div[class*='content']",
+                "div[class*='main']",
+                "div[id*='content']",
+                "div[id*='main']",
+                // Last resort: any div with substantial text content
+                "body > div",
               ];
 
               for (const selector of contentSelectors) {
-                const element = $(selector);
-                if (element.length > 0) {
-                  // Remove navigation, header, footer elements
-                  element
-                    .find(
-                      "nav, header, footer, .nav, .header, .footer, .menu, .sidebar"
-                    )
-                    .remove();
-                  content = element.text().trim();
+                const elements = $(selector);
+                if (elements.length > 0) {
+                  // For each matching element, test content quality
+                  elements.each((_, element) => {
+                    const $element = $(element);
+
+                    // Remove navigation, header, footer elements from a clone
+                    const cleanElement = $element.clone();
+                    cleanElement
+                      .find(
+                        "nav, header, footer, script, style, .nav, .header, .footer, .menu, .sidebar, .navigation"
+                      )
+                      .remove();
+
+                    const candidateContent = cleanElement.text().trim();
+
+                    // Score content quality: longer content with relevant keywords scores higher
+                    const hasRelevantContent =
+                      candidateContent.toLowerCase().includes("holochain") ||
+                      candidateContent.toLowerCase().includes("validation") ||
+                      candidateContent.toLowerCase().includes("dht") ||
+                      candidateContent.toLowerCase().includes("entry") ||
+                      candidateContent.toLowerCase().includes("link");
+
+                    const contentScore =
+                      candidateContent.length + (hasRelevantContent ? 500 : 0);
+
+                    // Use this content if it's better than what we have
+                    if (contentScore > content.length + 100) {
+                      // Require significant improvement
+                      content = candidateContent;
+                    }
+                  });
+
                   if (content.length > 100) break; // Good content found
                 }
               }
@@ -374,13 +470,21 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
                 content = bodyContent.text().trim();
               }
 
-              // Extract title - prefer h1 over title tag
-              title = $("h1").first().text().trim() || $("title").text().trim() || "";
+              // Extract title - prefer title tag for page titles
+              title =
+                $("title").text().trim() || $("h1").first().text().trim() || "";
 
               // Clean up content - remove extra whitespace and common navigation text
               content = content
                 .replace(/\s+/g, " ")
-                .replace(/Get Started|Developers|Navigation|Menu|Search/gi, "")
+                .replace(
+                  /Get Started|Developers|Navigation|Menu|Search|Home|Back to top|Skip to|Table of contents/gi,
+                  ""
+                )
+                .replace(/Circle with shading containing.*?statistic/gi, "")
+                .replace(/YouTube play video icon.*?logo/gi, "")
+                .replace(/Edge_Logo_\d+x\d+/gi, "")
+                .replace(/^\s*(Navigation|Menu|Header|Footer)\s*/gi, "")
                 .trim();
 
               return {
@@ -434,12 +538,28 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
                   }
                 }
               }
-              
-              // Also try to extract function signature from .fqn if no other content
-              if (!content || content === "No documentation content found.") {
-                const fqnContent = $(".fqn").text().trim();
-                if (fqnContent) {
-                  content = `Function signature: ${fqnContent}\n\n${content || "No additional documentation available."}`;
+
+              // Always try to extract function signature from .fqn and include it
+              const fqnContent = $(".fqn").text().trim();
+              if (fqnContent) {
+                if (!content || content.length < 50) {
+                  content = `Function signature: ${fqnContent}\n\n${
+                    content || "No additional documentation available."
+                  }`;
+                } else if (
+                  !content.toLowerCase().includes("externresult") &&
+                  !content.includes(fqnContent)
+                ) {
+                  // Prepend signature if not already included and doesn't have signature content
+                  content = `Function signature: ${fqnContent}\n\n${content}`;
+                }
+              }
+
+              // If still no meaningful content, also try body content as last resort
+              if (!content || content.length < 50) {
+                const bodyContent = $("body").text().trim();
+                if (bodyContent && bodyContent.length > content.length) {
+                  content = bodyContent;
                 }
               }
 
@@ -449,7 +569,10 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
 
               return {
                 title: title || "Documentation",
-                content: content || "No documentation content found.",
+                content:
+                  content.length > 0
+                    ? content
+                    : "No documentation content found.",
                 source: url.includes("/hdk/") ? "docs.rs/hdk" : "docs.rs/hdi",
               };
             }
@@ -485,12 +608,14 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
         const functions: HdkFunction[] = [];
         const seenFunctions = new Set<string>();
 
-        // Look for function links in different patterns
+        // Enhanced function discovery with multiple strategies
+
+        // Strategy 1: Look for direct function links
         const functionSelectors = [
           "a[href*='/fn.']", // Direct function links
           "a[href*='fn.']", // Relative function links
-          "a[href*='function']", // Alternative function link pattern
-          ".item-name a", // Item name links that might be functions
+          ".item-name a", // Item name links
+          ".module-item a", // Module item links
         ];
 
         functionSelectors.forEach((selector) => {
@@ -498,56 +623,73 @@ const DocumentationParserLive = Layer.succeed(DocumentationParserTag, {
             const href = $(el).attr("href");
             const text = $(el).text().trim();
 
-            if (
-              href &&
-              text &&
-              (href.includes("fn.") || text.match(/^[a-z_][a-z0-9_]*$/))
-            ) {
-              // Extract function name from either the text or the href
-              let functionName = text;
+            if (href && href.includes("fn.")) {
+              const match = href.match(/fn\.([^.\/]+)\.html/);
+              if (match && match[1]) {
+                const functionName = match[1];
 
-              // Extract from href if text doesn't look like a function name
-              if (
-                !functionName.match(/^[a-z_][a-z0-9_]*$/) &&
-                href.includes("fn.")
-              ) {
-                const match = href.match(/fn\.([^.]+)/);
-                if (match && match[1]) {
-                  functionName = match[1];
+                if (!seenFunctions.has(functionName)) {
+                  seenFunctions.add(functionName);
+
+                  // Construct proper URL
+                  let functionUrl;
+                  if (href.startsWith("http")) {
+                    functionUrl = href;
+                  } else if (href.startsWith("/")) {
+                    functionUrl = `https://docs.rs${href}`;
+                  } else {
+                    functionUrl = `${baseUrl}/${href}`;
+                  }
+
+                  functions.push({
+                    name: functionName,
+                    url: functionUrl,
+                  });
                 }
-              }
-
-              // If the text looks like a module path (e.g., "crate::entry::create_entry"),
-              // extract just the function name
-              if (functionName.includes("::")) {
-                functionName = functionName.split("::").pop() || functionName;
-              }
-
-              // Only add if it looks like a valid function name and we haven't seen it
-              if (
-                functionName.match(/^[a-z_][a-z0-9_]*$/) &&
-                !seenFunctions.has(functionName)
-              ) {
-                seenFunctions.add(functionName);
-
-                // Construct proper URL
-                let functionUrl;
-                if (href.startsWith("http")) {
-                  functionUrl = href;
-                } else if (href.startsWith("/")) {
-                  functionUrl = `https://docs.rs${href}`;
-                } else {
-                  functionUrl = `${baseUrl}/${href}`;
-                }
-
-                functions.push({
-                  name: functionName,
-                  url: functionUrl,
-                });
               }
             }
           });
         });
+
+        // Strategy 2: Look for module links and explore them
+        const moduleLinks = new Set<string>();
+        $("a[href*='/index.html'], a[href$='/']").each((_, el) => {
+          const href = $(el).attr("href");
+          if (href && !href.includes("../")) {
+            if (href.startsWith("/")) {
+              moduleLinks.add(`https://docs.rs${href}`);
+            } else {
+              moduleLinks.add(`${baseUrl}/${href}`);
+            }
+          }
+        });
+
+        console.error(
+          `Found ${moduleLinks.size} potential module links to explore`
+        );
+
+        // Strategy 3: Also look for any text patterns that look like function names
+        // in the context of the page that might indicate available functions
+        const textContent = $("body").text();
+        const functionNamePattern = /\b([a-z_][a-z0-9_]*)\s*\(/g;
+        let match;
+        const potentialFunctions = new Set<string>();
+
+        while ((match = functionNamePattern.exec(textContent)) !== null) {
+          const funcName = match[1];
+          if (
+            funcName &&
+            funcName.length > 2 &&
+            funcName.length < 30 &&
+            !funcName.includes("__")
+          ) {
+            potentialFunctions.add(funcName);
+          }
+        }
+
+        console.error(
+          `Found ${potentialFunctions.size} potential function names in text`
+        );
 
         // Also look for module-based functions by exploring module pages
         const modules = [
@@ -774,79 +916,203 @@ const HolochainDocServiceLive = Layer.effect(
         )
       );
 
+    // Dynamic HDK function discovery with caching
+    const hdkFunctionCache = new Map<
+      string,
+      { functions: HdkFunction[]; timestamp: number }
+    >();
+    const FUNCTION_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+    const discoverHDKFunctions = (): Effect.Effect<
+      HdkFunction[],
+      FetchError | ParseError
+    > => {
+      // Check cache first
+      const cached = hdkFunctionCache.get("hdk_functions");
+      if (cached && Date.now() - cached.timestamp < FUNCTION_CACHE_TTL) {
+        console.error(
+          `HDK function cache hit: ${cached.functions.length} functions`
+        );
+        return Effect.succeed(cached.functions);
+      }
+
+      return pipe(
+        httpService.fetchPage(`${config.baseUrls.hdk}/index.html`),
+        Effect.flatMap((html) =>
+          parser.parseHdkIndex(html, config.baseUrls.hdk)
+        ),
+        Effect.tap((functions) => {
+          // Cache the discovered functions
+          hdkFunctionCache.set("hdk_functions", {
+            functions,
+            timestamp: Date.now(),
+          });
+          console.error(
+            `Discovered and cached ${functions.length} HDK functions`
+          );
+          return Effect.succeed(undefined);
+        }),
+        Effect.catchAll((error) => {
+          console.error(
+            "Failed to discover HDK functions, using fallback discovery"
+          );
+          return discoverHDKFunctionsFallback();
+        })
+      );
+    };
+
+    const discoverHDKFunctionsFallback = (): Effect.Effect<
+      HdkFunction[],
+      FetchError | ParseError
+    > => {
+      // Fallback: crawl known module pages to discover functions
+      const knownModules = [
+        "entry",
+        "link",
+        "agent",
+        "chain",
+        "p2p",
+        "capability",
+        "ed25519",
+        "hash",
+        "info",
+        "time",
+        "random",
+        "x_salsa20_poly1305",
+      ];
+
+      return pipe(
+        knownModules,
+        Array.map((module) =>
+          pipe(
+            httpService.fetchPage(
+              `${config.baseUrls.hdk}/${module}/index.html`
+            ),
+            Effect.flatMap((html) =>
+              Effect.try({
+                try: () => {
+                  const $ = cheerio.load(html);
+                  const functions: HdkFunction[] = [];
+
+                  // Look for function links in the module page
+                  $("a[href*='fn.']").each((_, el) => {
+                    const href = $(el).attr("href");
+                    const text = $(el).text().trim();
+
+                    if (href && text && href.includes("fn.")) {
+                      const match = href.match(/fn\.([^.]+)\.html/);
+                      if (match && match[1]) {
+                        const functionName = match[1];
+                        let functionUrl;
+
+                        if (href.startsWith("http")) {
+                          functionUrl = href;
+                        } else if (href.startsWith("/")) {
+                          functionUrl = `https://docs.rs${href}`;
+                        } else {
+                          functionUrl = `${config.baseUrls.hdk}/${module}/${href}`;
+                        }
+
+                        functions.push({
+                          name: functionName,
+                          url: functionUrl,
+                        });
+                      }
+                    }
+                  });
+
+                  console.error(
+                    `Discovered ${functions.length} functions in ${module} module`
+                  );
+                  return functions;
+                },
+                catch: (error) =>
+                  new ParseError({
+                    message: `Failed to parse ${module} module: ${error}`,
+                  }),
+              })
+            ),
+            Effect.catchAll(() => Effect.succeed([] as HdkFunction[]))
+          )
+        ),
+        Effect.all,
+        Effect.map(Array.flatten),
+        Effect.map((functions) => {
+          // Remove duplicates and cache
+          const uniqueFunctionMap = new Map<string, HdkFunction>();
+          functions.forEach(f => uniqueFunctionMap.set(f.name, f));
+          const uniqueFunctions = [...uniqueFunctionMap.values()];
+
+          hdkFunctionCache.set("hdk_functions", {
+            functions: uniqueFunctions,
+            timestamp: Date.now(),
+          });
+
+          console.error(
+            `Fallback discovery found ${uniqueFunctions.length} unique HDK functions`
+          );
+          return uniqueFunctions;
+        })
+      );
+    };
+
     const getHDKFunctionDocs = (
       functionName: string
     ): Effect.Effect<
       DocumentationResult,
       FetchError | ParseError | NotFoundError
     > => {
-      // Direct mapping of HDK functions to their correct URLs
-      // This replaces the fragile scraping approach with known-good URLs
-      const hdkFunctionMap: Record<string, string> = {
-        // Entry module functions
-        "create_entry": "entry/fn.create_entry.html",
-        "get": "entry/fn.get.html", 
-        "update_entry": "entry/fn.update_entry.html",
-        "delete_entry": "entry/fn.delete_entry.html",
-        
-        // Link module functions
-        "create_link": "link/fn.create_link.html",
-        "get_links": "link/fn.get_links.html", 
-        "delete_link": "link/fn.delete_link.html",
-        "get_link_details": "link/fn.get_link_details.html",
-        
-        // Agent module functions
-        "agent_info": "agent/fn.agent_info.html",
-        
-        // Chain module functions
-        "get_chain_head": "chain/fn.get_chain_head.html",
-        "query": "chain/fn.query.html",
-        
-        // P2P module functions
-        "call": "p2p/fn.call.html",
-        "call_remote": "p2p/fn.call_remote.html", 
-        "emit_signal": "p2p/fn.emit_signal.html",
-        
-        // Capability module functions
-        "create_cap_grant": "capability/fn.create_cap_grant.html",
-        "create_cap_claim": "capability/fn.create_cap_claim.html",
-        
-        // Crypto functions
-        "sign": "ed25519/fn.sign.html",
-        "verify_signature": "ed25519/fn.verify_signature.html",
-        "encrypt": "x_salsa20_poly1305/fn.encrypt.html",
-        "decrypt": "x_salsa20_poly1305/fn.decrypt.html",
-        
-        // Hash functions
-        "hash": "hash/fn.hash.html",
-        
-        // Info functions  
-        "dna_info": "info/fn.dna_info.html",
-        "zome_info": "info/fn.zome_info.html",
-        "call_info": "info/fn.call_info.html",
-        
-        // Time functions
-        "sys_time": "time/fn.sys_time.html",
-        "schedule": "time/fn.schedule.html",
-        
-        // Random functions
-        "random_bytes": "random/fn.random_bytes.html"
-      };
+      return pipe(
+        discoverHDKFunctions(),
+        Effect.flatMap((hdkFunctions) => {
+          // Use fuzzy search to find the best matching function
+          const fuse = new Fuse(hdkFunctions, {
+            keys: ["name"],
+            includeScore: true,
+            threshold: 0.3, // Allow some fuzzy matching
+          });
 
-      const functionPath = hdkFunctionMap[functionName.toLowerCase()];
-      
-      if (!functionPath) {
-        return Effect.fail(
-          new NotFoundError({
-            message: `HDK function not found: ${functionName}. Available functions: ${Object.keys(hdkFunctionMap).join(", ")}`,
-          })
-        );
-      }
+          const searchResults = fuse.search(functionName);
 
-      const functionUrl = `${config.baseUrls.hdk}/${functionPath}`;
-      console.error(`Looking up HDK function '${functionName}' at: ${functionUrl}`);
-      
-      return fetchDocumentationPage(functionUrl);
+          return pipe(
+            Option.fromNullable(searchResults[0]),
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new NotFoundError({
+                    message: `HDK function not found: ${functionName}. Available functions: ${hdkFunctions
+                      .map((f) => f.name)
+                      .slice(0, 20)
+                      .join(", ")}${
+                      hdkFunctions.length > 20
+                        ? `, and ${hdkFunctions.length - 20} more...`
+                        : ""
+                    }`,
+                  })
+                ),
+              onSome: (result) => {
+                console.error(
+                  `Found HDK function '${functionName}' -> '${result.item.name}' at: ${result.item.url} (score: ${result.score})`
+                );
+                return fetchDocumentationPage(result.item.url);
+              },
+            })
+          );
+        }),
+        Effect.catchAll((error) => {
+          console.error(`Failed to lookup HDK function '${functionName}':`, {
+            error: error._tag ? error : String(error),
+            functionName,
+          });
+          return Effect.fail(
+            new NotFoundError({
+              message: `Failed to lookup HDK function: ${functionName}. Error: ${
+                error._tag || String(error)
+              }`,
+            })
+          );
+        })
+      );
     };
 
     const getConceptDocs = (
@@ -1222,6 +1488,8 @@ server.registerTool(
     };
   }
 );
+
+// Testing exports will be added later
 
 // Start the server
 async function main() {

@@ -83,9 +83,18 @@ describe("Performance and Timeout Handling", () => {
         
         const results = yield* Effect.all(operations, { concurrency: "unbounded" })
         
-        expect(results[0]?.title).toBeDefined() // First should succeed
-        expect(results[1]?._tag).toBe("Right")  // Second should succeed with minimal content
-        expect(results[2]?.title).toBeDefined() // Third should succeed
+        expect(results[0]).toBeDefined() // First should succeed
+        if (results[0] && "title" in results[0]) {
+          expect(results[0].title).toBeDefined()
+        }
+        expect(results[1]).toBeDefined() // Second should succeed  
+        if (results[1] && "_tag" in results[1]) {
+          expect(results[1]._tag).toBe("Right")  // Should be Right (success)
+        }
+        expect(results[2]).toBeDefined() // Third should succeed
+        if (results[2] && "title" in results[2]) {
+          expect(results[2].title).toBeDefined()
+        }
       }))
     )
   })

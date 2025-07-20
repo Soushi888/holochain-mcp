@@ -5,7 +5,7 @@ node_modules
 out
 dist
 *.tgz
-build
+build/*
 
 # code coverage
 coverage
@@ -33,3 +33,4 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+build/index.js
