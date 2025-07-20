@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>create_entry in hdk::entry - Rust</title>
+</head>
+<body>
+    <h1>Function create_entry<span>Copy item path</span></h1>
+    
+    <div class="item-info">
+        <div class="fqn">pub fn create_entry&lt;I, E&gt;(input: I) -&gt; ExternResult&lt;ActionHash&gt;</div>
+        
+        <div class="docblock">
+            <p>Create an app entry. Also see <a href="fn.create.html">create</a>.</p>
+            
+            <p>Apps define app entries by registering entry def ids with the entry_defs callback and serialize the
+            entry content when committing to the source chain.</p>
+            
+            <p>This function creates entries in the local source chain only. The entry will be validated by 
+            the local agent and then stored. To publish the entry to the DHT, use additional functions 
+            like create_link or emit_signal.</p>
+            
+            <h3>Examples</h3>
+            <pre><code>
+use hdk::prelude::*;
+
+#[hdk_entry_helper]
+#[derive(Clone)]
+pub struct Foo(String);
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
+pub enum EntryTypes {
+    Foo(Foo),
+}
+
+// Create a new entry
+let foo = Foo("Hello, world!".to_string());
+let action_hash = create_entry(EntryTypes::Foo(foo))?;
+            </code></pre>
+        </div>
+    </div>
+</body>
+</html>

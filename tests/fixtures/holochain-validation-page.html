@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Validation: Assuring Data Integrity</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+    <header id="page-header">
+        <nav>Navigation</nav>
+    </header>
+    
+    <div class="main-area">
+        <h1>Validation: Assuring Data Integrity</h1>
+        
+        <section id="what-youll-learn">
+            <h2>What you'll learn</h2>
+            <ol>
+                <li>Why validation matters</li>
+                <li>How complex validations can be sped up</li>
+                <li>How validation rules are defined</li>
+                <li>When validation happens</li>
+            </ol>
+        </section>
+
+        <section id="why-it-matters">
+            <h2>Why it matters</h2>
+            <p>"Data validation rules are the core of a Holochain app."</p>
+            <p>Holochain DNAs can specify validation rules for DHT operations. This empowers agents to check the integrity of the data they see.</p>
+        </section>
+
+        <section id="validation-beating-heart">
+            <h2>Validation: the beating heart of Holochain</h2>
+            <p>Unlike blockchain systems where validation is performed by a special class of nodes (miners or validators), in Holochain every participant validates the data they encounter.</p>
+            <p>This distributed validation approach ensures data integrity without requiring consensus mechanisms or proof-of-work.</p>
+        </section>
+
+        <section id="how-validation-rules-are-defined">
+            <h2>How validation rules are defined</h2>
+            <p>A validation rule is simply a callback function in an integrity zome that takes an operation, analyzes it, and returns a validation result.</p>
+            <p>You define these rules using the HDK (Holochain Development Kit) functions like validate_create_entry, validate_update_entry, etc.</p>
+        </section>
+    </div>
+
+    <div class="side-bar">
+        <ul>
+            <li>Table of Contents</li>
+            <li>Additional Resources</li>
+        </ul>
+    </div>
+
+    <footer id="page-footer">
+        <p>© 2024 Holochain Foundation</p>
+    </footer>
+
+    <script>
+        // Some JavaScript
+    </script>
+</body>
+</html>
