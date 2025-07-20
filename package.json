@@ -1,0 +1,49 @@
+{
+  "name": "holochain-mcp-server",
+  "version": "1.0.0",
+  "description": "A Model Context Protocol server for Holochain documentation",
+  "type": "module",
+  "bin": {
+    "holochain-mcp-server": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x build/index.js",
+    "dev": "tsc --watch",
+    "start": "node build/index.js",
+    "inspector": "npx @modelcontextprotocol/inspector build/index.js"
+  },
+  "dependencies": {
+    "@effect/platform": "latest",
+    "@effect/platform-node": "latest",
+    "@modelcontextprotocol/sdk": "latest",
+    "cheerio": "^1.0.0-rc.12",
+    "effect": "latest",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0"
+  },
+  "keywords": [
+    "holochain",
+    "mcp",
+    "documentation",
+    "hdk",
+    "hdi",
+    "model-context-protocol",
+    "effect-ts",
+    "functional-programming"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/holochain-mcp-server"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
